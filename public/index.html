@@ -1092,6 +1092,17 @@
 
     <script>
       /** =========================
+       *  ★ Google Sheets 연동 설정
+       *  ========================= */
+      // TODO: 여기에 Google Sheets ID를 입력하세요
+      // 시트 URL이 https://docs.google.com/spreadsheets/d/XXXXX/edit 라면
+      // XXXXX 부분이 SHEET_ID입니다
+      const SHEET_ID = "11GMO9pGnq-mGonfBOjhzbi1FttAAC86OIgbsgUqlKoc";
+
+      // 시트 이름 (탭 이름, 기본값은 첫 번째 시트)
+      const SHEET_NAME = "집계"; // 비워두면 첫 번째 시트 사용
+
+      /** =========================
        *  0) 데이터 반영(총 20주 중 4주 반영)
        *  ========================= */
       const TOTAL_WEEKS = 20;
@@ -1551,8 +1562,147 @@
 
       window.addEventListener("resize", () => updateHeaderWeek());
 
-      decodeStateFromUrl();
-      render();
+      /** =========================
+       *  Google Sheets 데이터 로드
+       *  ========================= */
+      async function loadFromGoogleSheets() {
+        if (!SHEET_ID || SHEET_ID === "YOUR_SHEET_ID_HERE") {
+          console.log("Google Sheets ID가 설정되지 않음. 기본 데이터 사용.");
+          return false;
+        }
+
+        try {
+          // 로딩 상태 표시
+          const board = document.getElementById("board");
+          board.innerHTML = `<div style="padding:24px; color:#667085; font-family:SUIT, Pretendard, system-ui, sans-serif; text-align:center;">
+            <div style="font-size:24px; margin-bottom:8px;">⏳</div>
+            데이터를 불러오는 중...
+          </div>`;
+
+          const sheetParam = SHEET_NAME
+            ? `&sheet=${encodeURIComponent(SHEET_NAME)}`
+            : "";
+          const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json${sheetParam}`;
+
+          const response = await fetch(url);
+          const text = await response.text();
+
+          // Google의 응답은 "google.visualization.Query.setResponse({...})" 형태
+          // JSON 부분만 추출
+          const jsonMatch = text.match(
+            /google\.visualization\.Query\.setResponse\(([\s\S]+)\);?$/
+          );
+          if (!jsonMatch) {
+            throw new Error("Google Sheets 응답 파싱 실패");
+          }
+
+          const data = JSON.parse(jsonMatch[1]);
+          const rows = data.table.rows;
+          const cols = data.table.cols;
+
+          // 헤더 인덱스 찾기 (한글 컬럼명 지원)
+          const headerMap = {};
+          const findHeader = (label) => {
+            const l = label.toLowerCase().trim();
+            if (l === "팀명" || l === "team") return "team";
+            if (l === "팀원명" || l === "members") return "members";
+            if (l.includes("읽기") || l === "r") return "R";
+            if (l.includes("줌") || l === "z") return "Z";
+            if (l.includes("이벤트") || l === "e") return "E";
+            return null;
+          };
+
+          cols.forEach((col, idx) => {
+            const key = findHeader(col.label || "");
+            if (key) headerMap[key] = idx;
+          });
+
+          // 첫 번째 행이 상위 헤더인 경우 스킵 (예: "3주차 집계" 등)
+          // 실제 헤더를 찾을 때까지 스킵
+          while (headerMap.team === undefined && rows.length > 0) {
+            const currentRow = rows[0].c;
+            const tempMap = {};
+
+            currentRow.forEach((cell, idx) => {
+              const val = (cell?.v || "").toString();
+              const key = findHeader(val);
+              if (key) tempMap[key] = idx;
+            });
+
+            // "팀명" 컬럼을 찾았으면 이 행이 헤더
+            if (tempMap.team !== undefined) {
+              Object.assign(headerMap, tempMap);
+              rows.shift(); // 헤더 행 제거
+              break;
+            }
+
+            // 아니면 상위 헤더로 간주하고 스킵
+            rows.shift();
+          }
+
+          if (headerMap.team === undefined) {
+            throw new Error("'팀명' 컬럼을 찾을 수 없습니다");
+          }
+
+          // 데이터 파싱
+          const parsed = [];
+          for (const row of rows) {
+            const cells = row.c;
+            const team = (cells[headerMap.team]?.v || "").toString().trim();
+            if (!team) continue;
+
+            const membersRaw =
+              headerMap.members !== undefined
+                ? (cells[headerMap.members]?.v || "").toString().trim()
+                : "";
+            const members = membersRaw
+              ? membersRaw
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+              : [];
+
+            parsed.push({
+              team,
+              members,
+              R: Number(cells[headerMap.R]?.v) || 0,
+              Z: Number(cells[headerMap.Z]?.v) || 0,
+              E: Number(cells[headerMap.E]?.v) || 0,
+            });
+          }
+
+          if (parsed.length === 0) {
+            throw new Error("유효한 데이터가 없습니다");
+          }
+
+          state = parsed;
+          console.log(
+            `Google Sheets에서 ${parsed.length}개 팀 데이터 로드 완료`
+          );
+          return true;
+        } catch (error) {
+          console.error("Google Sheets 로드 실패:", error);
+          alert(
+            `Google Sheets 로드 실패: ${error.message}\n기본 데이터를 사용합니다.`
+          );
+          return false;
+        }
+      }
+
+      // 초기화
+      async function init() {
+        // URL 파라미터에 데이터가 있으면 우선 사용
+        const hasUrlData = decodeStateFromUrl();
+
+        // URL 데이터가 없으면 Google Sheets에서 로드
+        if (!hasUrlData) {
+          await loadFromGoogleSheets();
+        }
+
+        render();
+      }
+
+      init();
     </script>
   </body>
 </html>
