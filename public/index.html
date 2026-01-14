@@ -1614,7 +1614,8 @@
 
           cols.forEach((col, idx) => {
             const key = findHeader(col.label || "");
-            if (key) headerMap[key] = idx;
+            // 먼저 매칭된 컬럼 우선 (중복 방지: "줌" vs "1차 줌미팅")
+            if (key && headerMap[key] === undefined) headerMap[key] = idx;
           });
 
           // 첫 번째 행이 상위 헤더인 경우 스킵 (예: "3주차 집계" 등)
